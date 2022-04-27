@@ -1,0 +1,1194 @@
+---
+title: 'PGRS analyses"
+editor_options:
+  chunk_output_type: console
+date: 'April 25th 2022'
+output: word_document:
+    df_print: paged
+---
+
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r, attr.source='.numberLines'}
+
+
+
+rm(list=ls())
+#install.packages("readstata13")
+library(readstata13)
+#install.packages('lme4')
+library(lme4)
+library(nlme)
+library(dplyr)
+#install.packages('rmarkdown')
+library(rmarkdown)
+library(haven)
+#install.packages('lmerTest')
+library(lmerTest)
+library(ggplot2)
+#install.packages('parameters')
+library(parameters)
+#install.packages('effects')
+library(effects)
+#install.packages('car')
+library(car)
+#install.packages('icenReg')
+library(icenReg)
+#install.packages('lmtest')
+library(lmtest)
+
+
+myData <- read.dta13('M:/Documents/PGRS/workfile_wCombatASHS_Demogr.dta')
+
+#Number of APOE e4 alleles
+myData$apoe4_num[(myData$bl_apoe == 'E2/E3'| myData$bl_apoe =='E3/E3')] <- 0
+myData$apoe4_num[(myData$bl_apoe =='E2/E4' |  myData$bl_apoe =='E3/E4' )] <- 1
+myData$apoe4_num[(myData$bl_apoe =='E4/E4' )] <- 2
+myData$apoe4_num <- factor(myData$apoe4_num)
+
+#APOE e4 carrier status
+myData$apoe4[(myData$bl_apoe == 'E2/E3' |  myData$bl_apoe =='E3/E3' )] <- 0
+myData$apoe4[(myData$bl_apoe =='E2/E4' |  myData$bl_apoe =='E3/E4' ) |
+                   (myData$bl_apoe =='E4/E4' )] <- 1
+myData$apoe4 <- factor(myData$apoe4)
+
+myData$ScannerNumber <- factor(myData$ScannerNumber)
+myData$StrippedID <- factor(myData$StrippedID)
+
+myData$Sex[(myData$gender==0)] <- 'male'
+myData$Sex[(myData$gender==1)] <- 'female'
+myData$Sex <- factor(myData$Sex, levels=c('female','male'))
+
+#Computing Cognitive composite score, for cases both with and without VOSP silhouettes
+myData$comp_Tscore_w_VOSP <- ifelse( !is.na(myData$cerad_recall_tscore) & !is.na(myData$cowat_tscore) & !is.na(myData$tmtb_tscore), ifelse(!is.na(myData$vosp_tscore), (myData$cerad_recall_tscore + myData$cowat_tscore + myData$tmtb_tscore + myData$vosp_tscore)/4, (myData$cerad_recall_tscore + myData$cowat_tscore + myData$tmtb_tscore)/3), NA)
+
+#Computing a Cognitive composite score omitting VOSP silhouettes for all cases
+myData$comp_Tscore_wo_VOSP <- ifelse( !is.na(myData$cerad_recall_tscore) & !is.na(myData$cowat_tscore) & !is.na(myData$tmtb_tscore), (myData$cerad_recall_tscore + myData$cowat_tscore + myData$tmtb_tscore)/3, NA)
+
+myData$study.time <- as.Date(myData$studytime, '%Y%m%d')
+myData$study.time <- strptime(myData$study.time, format='%Y-%m-%d')
+myData$baseline.time <- as.Date(myData$baselinetime, '%Y%m%d')
+myData$baseline.time <- strptime(myData$baseline.time, format='%Y-%m-%d')
+myData$time.in.days <- difftime(myData$study.time, myData$baseline.time, units='days')
+myData$time.in.years <- myData$time.in.days/365.25
+myData$time.in.years <- as.numeric(myData$time.in.years)
+
+#Computing MTC volume for the standard AD PRS based on Combat harmonized ASHS segmentation volumes of ERC, Br35 and Br36 on both sides
+myData$MTC.AD_no_stag <- (myData$left_ERC_combat_AD_PGRS_no_stag + myData$right_ERC_combat_AD_PGRS_no_stag + 
+  myData$left_Br35_combat_AD_PGRS_no_stag + myData$right_Br35_combat_AD_PGRS_no_sta +
+  myData$left_Br36_combat_AD_PGRS_no_stag + myData$right_Br36_combat_AD_PGRS_no_sta)/2
+
+#Computing MTC volume for the PRS_INF based on Combat harmonized ASHS segmentation volumes of ERC, Br35 and Br36 on both sides
+myData$MTC.Infl_no_stag <- (myData$left_ERC_combat_Infl_PGRS_no_sta + myData$right_ERC_combat_Infl_PGRS_no_st + 
+  myData$left_Br35_combat_Infl_PGRS_no_st + myData$right_Br35_combat_Infl_PGRS_no_s +
+  myData$left_Br36_combat_Infl_PGRS_no_st + myData$right_Br36_combat_Infl_PGRS_no_s)/2
+
+#Computing MTC volume for the PRS_CVD based on Combat harmonized ASHS segmentation volumes of ERC, Br35 and Br36 on both sides
+myData$MTC.CVD_no_stag <- (myData$left_ERC_combat_CVD_PGRS_no_stag + myData$right_ERC_combat_CVD_PGRS_no_sta + 
+  myData$left_Br35_combat_CVD_PGRS_no_sta + myData$right_Br35_combat_CVD_PGRS_no_st +
+  myData$left_Br36_combat_CVD_PGRS_no_sta + myData$right_Br36_combat_CVD_PGRS_no_st)/2
+
+#Using the scores that were selected based on analyses in APGEM
+myData$AD.PGRS <- myData$AD_0_001_without_APOE_1
+myData$Infl.PGRS <- myData$cFDR_inflammatory_0_05_1
+myData$CVD.PGRS <- myData$cFDR_cardiometabolic_0_05_1
+
+#Defining stage-variables
+myData$stage[(myData$Stage == 1)] <- 'NC'
+myData$stage[(myData$Stage == 2)] <- 'NC'
+myData$stage[(myData$Stage == 3)] <- 'Not-NC'
+myData$stage[(myData$Stage == 9)] <- 'Not-NC'
+myData$stage[(myData$Stage == 4)] <- 'SCD'
+myData$stage[(myData$Stage == 5)] <- 'SCD'
+myData$stage[(myData$Stage == 6)] <- 'MCI'
+myData$stage[(myData$Stage == 7)] <- 'MCI'
+myData$stage[(myData$Stage == 8)] <- 'DEM'
+
+myData$stage <- factor(myData$stage, levels=c('NC','SCD', 'Not-NC', 'MCI', 'DEM'))
+
+myData$stage_baseline[(myData$Stage_baseline == 1)] <- 'NC'
+myData$stage_baseline[(myData$Stage_baseline == 2)] <- 'NC'
+myData$stage_baseline[(myData$Stage_baseline == 3)] <- 'Not-NC'
+myData$stage_baseline[(myData$Stage_baseline == 9)] <- 'Not-NC'
+myData$stage_baseline[(myData$Stage_baseline == 4)] <- 'SCD'
+myData$stage_baseline[(myData$Stage_baseline == 5)] <- 'SCD'
+myData$stage_baseline[(myData$Stage_baseline == 6)] <- 'MCI'
+myData$stage_baseline[(myData$Stage_baseline == 7)] <- 'MCI'
+
+myData$stage_baseline <- factor(myData$stage_baseline, levels=c('NC','SCD', 'Not-NC', 'MCI'))
+
+
+nrow(myData)
+
+
+#Removing subjects without APOE data
+myData <- myData[!is.na(myData$apoe4_num),]
+nrow(myData)              
+  
+#Removing subjects >80 years at baseline (exclusion criteria)
+myData <- myData[myData$age_at_baseline <= 80,]
+nrow(myData)
+
+
+##########################
+### Upper and lower st.dev
+##########################
+
+myData.cross <- myData[myData$assessment==1,]
+
+#Defining low- and high risk groups based on standard AD PGRS
+AD_PGRS_mean <- mean(subset(myData, assessment==1)$AD.PGRS, na.rm=TRUE)
+AD_PGRS_SD <- sd(subset(myData, assessment==1)$AD.PGRS, na.rm=TRUE)
+
+qa.lo <- AD_PGRS_mean - AD_PGRS_SD
+qa.hi <- AD_PGRS_mean + AD_PGRS_SD
+
+myData$AD.HiLo[(myData$AD.PGRS > qa.hi )] <- 'HI'
+myData$AD.HiLo[(myData$AD.PGRS < qa.lo )] <- 'LO'
+myData$AD.HiLo <- factor(myData$AD.HiLo, levels=c('LO','HI'))
+
+
+#Defining low- and high risk groups based on PGRS_INFL
+Infl_PGRS_mean <- mean(subset(myData, assessment==1)$Infl.PGRS, na.rm=TRUE)
+Infl_PGRS_SD <- sd(subset(myData, assessment==1)$Infl.PGRS, na.rm=TRUE)
+
+qi.lo <- Infl_PGRS_mean - Infl_PGRS_SD
+qi.hi <- Infl_PGRS_mean + Infl_PGRS_SD
+
+myData$Infl.HiLo[(myData$Infl.PGRS > qi.hi )] <- 'HI'
+myData$Infl.HiLo[(myData$Infl.PGRS < qi.lo )] <- 'LO'
+myData$Infl.HiLo <- factor(myData$Infl.HiLo, levels=c('LO','HI'))
+
+
+#Defining low- and high risk groups based on PGRS_CVD
+CVD_PGRS_mean <- mean(subset(myData, assessment==1)$CVD.PGRS, na.rm=TRUE)
+CVD_PGRS_SD <- sd(subset(myData, assessment==1)$CVD.PGRS, na.rm=TRUE)
+
+qc.lo <- CVD_PGRS_mean - CVD_PGRS_SD
+qc.hi <- CVD_PGRS_mean + CVD_PGRS_SD
+
+myData$CVD.HiLo[(myData$CVD.PGRS > qc.hi )] <- 'HI'
+myData$CVD.HiLo[(myData$CVD.PGRS < qc.lo )] <- 'LO'
+myData$CVD.HiLo <- factor(myData$CVD.HiLo, levels=c('LO','HI'))
+
+#Data subsets with subjects only in low- or high risk groups
+myData.qa <- myData[!is.na(myData$AD.HiLo),]
+myData.qi <- myData[!is.na(myData$Infl.HiLo),]
+myData.qc <- myData[!is.na(myData$CVD.HiLo),]
+
+
+
+##############
+# Hazard files
+##############
+
+myData.HazardA <- read.dta13('M:/Documents/PGRS/workfile_CoxPropHaz_A_210526.dta')
+
+myData.HazardA$apoe4_num <- factor(myData.HazardA$apoe4_num)
+
+#Defining APOE e4 carrier status
+myData.HazardA$apoe4[(myData.HazardA$apoe4_num == 0)] <- 0
+myData.HazardA$apoe4[(myData.HazardA$apoe4_num == 1) |
+                       (myData.HazardA$apoe4_num == 2 )] <- 1
+myData.HazardA$apoe4 <- factor(myData.HazardA$apoe4)
+
+#Data subsets with subjects only in low- or high risk groups
+myData.HazardA.AD <- myData.HazardA[(myData.HazardA$AD_HiLo!='NA'),]
+myData.HazardA.AD$AD_HiLo <- factor(myData.HazardA.AD$AD_HiLo, levels=c('LO','HI'))
+
+myData.HazardA.Infl <- myData.HazardA[(myData.HazardA$Infl_HiLo!='NA'),]
+myData.HazardA.Infl$Infl_HiLo <- factor(myData.HazardA.Infl$Infl_HiLo, levels=c('LO','HI'))
+
+myData.HazardA.CVD <- myData.HazardA[(myData.HazardA$CVD_HiLo!='NA'),]
+myData.HazardA.CVD$CVD_HiLo <- factor(myData.HazardA.CVD$CVD_HiLo, levels=c('LO','HI'))
+
+
+
+
+```
+
+
+
+
+```{r, attr.source='.numberLines'}
+
+#Hazard ratio and survival plots- Amyloid status
+################################################
+
+set.seed(1234)
+
+#Standard AD PGRS
+myData.HazardA.AD$l <- as.numeric(myData.HazardA.AD$l)
+myData.HazardA.AD$u <- as.numeric(myData.HazardA.AD$u)
+res.CoxAD <- ic_sp(cbind(l,u) ~ AD_HiLo + apoe4, data=myData.HazardA.AD, model='ph', bs_samples=5000)
+summary(res.CoxAD)
+confint(res.CoxAD)
+
+resplot.CoxAD <- ic_sp(cbind(l,u) ~ AD_HiLo, data=myData.HazardA.AD, model='ph', bs_samples=500)
+summary(resplot.CoxAD)
+newData <- data.frame(AD_HiLo=c('LO','HI'))
+rownames(newData) <- c('LO','HI')
+
+tiff(filename='M:/Documents/PGRS/Survival_AD.tiff', width=2000, height=2000, res=300)
+plot(resplot.CoxAD, newdata=newData, main='Standard AD PGS', ylab='Survival rate', xlab='Age', xlim=c(40,80), col=c('cyan', 'red'),bty="L", las=1, cex.main=1.1, asp=25)
+dev.off()
+legend("right", legend=c("LO", "HI"), lwd=2, col=c("cyan","red"), bty="n")
+
+
+#PGRS_INFL
+myData.HazardA.Infl$l <- as.numeric(myData.HazardA.Infl$l)
+myData.HazardA.Infl$u <- as.numeric(myData.HazardA.Infl$u)
+res.CoxInfl <- ic_sp(cbind(l,u) ~ Infl_HiLo + apoe4 , data=myData.HazardA.Infl, model='ph', bs_samples=5000)
+summary(res.CoxInfl)
+confint(res.CoxInfl)
+
+resplot.CoxInfl <- ic_sp(cbind(l,u) ~ Infl_HiLo, data=myData.HazardA.Infl, model='ph', bs_samples=500)
+summary(resplot.CoxInfl)
+newData <- data.frame(Infl_HiLo=c('LO','HI'))
+rownames(newData) <- c('LO','HI')
+
+tiff(filename='M:/Documents/PGRS/Survival_INF.tiff', width=2000, height=2000, res=300)
+plot(resplot.CoxInfl, newdata=newData, main='Inflammatory informed AD PGS', ylab='Survival rate', xlab='Age', xlim=c(40,80), col=c('cyan', 'red'), bty="L", las=1, cex.main=1.1, asp=25)
+dev.off()
+
+
+#PGRS_CVD
+myData.HazardA.CVD$l <- as.numeric(myData.HazardA.CVD$l)
+myData.HazardA.CVD$u <- as.numeric(myData.HazardA.CVD$u)
+res.CoxCVD <- ic_sp(cbind(l,u) ~ CVD_HiLo + apoe4  , data=myData.HazardA.CVD, model='ph', bs_samples=5000)
+summary(res.CoxCVD)
+confint(res.CoxCVD)
+
+resplot.CoxCVD <- ic_sp(cbind(l,u) ~ CVD_HiLo, data=myData.HazardA.CVD, model='ph', bs_samples=500)
+summary(resplot.CoxCVD)
+newData <- data.frame(CVD_HiLo=c('LO','HI'))
+rownames(newData) <- c('LO','HI')
+
+tiff(filename='M:/Documents/PGRS/Survival_CVD.tiff', width=2000, height=2000, res=300)
+plot(resplot.CoxCVD, newdata=newData, main='CVD informed AD PGS', ylab='Survival rate', xlab='Age', xlim=c(40,80),col=c('cyan', 'red'), bty="L", las=1, cex.main=1.1, asp=25)
+
+dev.off()
+```
+
+
+
+```{r, attr.source='.numberLines'}
+
+
+### COMP T-SCORE
+##################
+
+###AD
+
+ss <- subset(myData.qa, !is.na(comptscore) & BLCogn==1, select=c(AD.HiLo,assessment))
+table(ss$AD.HiLo, ss$assessment)
+
+ggplot(myData.qa[which(myData.qa$BLCogn==1),], aes(x=time.in.years, y=comptscore)) + 
+  geom_point(aes(shape=AD.HiLo, color=AD.HiLo)) + 
+  geom_smooth(method=lm, aes(colour=AD.HiLo, fill=AD.HiLo), fullrange=TRUE) + 
+  scale_x_continuous(breaks=seq(0,8,by=2))
+
+ggplot(myData.qa[which(myData.qa$BLCogn==1),], aes(x=time.in.years, y=comptscore, group=StrippedID)) + 
+  geom_line(aes(color=AD.HiLo)) + scale_x_continuous(breaks=seq(0,8,by=2))
+
+#Including only if baseline data is available (BLCogn==1)
+model_AD_comptscore_1a <- lmer( comp_Tscore_w_VOSP ~ AD.HiLo * time.in.years + edu_years + age_at_baseline + Sex + apoe4  + (1|StrippedID), data = myData.qa[which(myData.qa$BLCogn==1),])
+summary(model_AD_comptscore_1a)
+confint(model_AD_comptscore_1a)
+
+model_AD_comptscore_1b <- lmer( comp_Tscore_w_VOSP ~ AD.HiLo * time.in.years + edu_years + age_at_baseline + Sex + apoe4  + (time.in.years|StrippedID), data = myData.qa[which(myData.qa$BLCogn==1),], control = lmerControl(check.nobs.vs.nRE = "ignore"))
+summary(model_AD_comptscore_1b)
+
+BIC(model_AD_comptscore_1a, model_AD_comptscore_1b)
+logLik(model_AD_comptscore_1a)
+logLik(model_AD_comptscore_1b)
+teststat <- -2* (as.numeric(logLik(model_AD_comptscore_1a))- as.numeric(logLik(model_AD_comptscore_1b)))
+(p.val <- pchisq(teststat, df = 2, lower.tail = FALSE))
+lrtest(model_AD_comptscore_1a, model_AD_comptscore_1b)
+
+model_AD_comptscore_2 <- lmer( comp_Tscore_w_VOSP ~ AD.HiLo * time.in.years + edu_years + age_at_baseline + Sex + apoe4*time.in.years  + (1|StrippedID), data = myData.qa[which(myData.qa$BLCogn==1),])
+summary(model_AD_comptscore_2)
+confint(model_AD_comptscore_2)
+
+model_AD_comptscore.fixed <- effect('AD.HiLo * time.in.years', model_AD_comptscore_1a, xlevels=list(time.in.years=seq(0,6,2)))
+model_AD_comptscore.fixed <- as.data.frame(model_AD_comptscore.fixed)
+
+tiff(filename='M:/Documents/PGRS/Long_Cogn_AD.tiff', width=2000, height=2000, res=300)
+ggplot(model_AD_comptscore.fixed, aes(x=time.in.years, y=fit, group=AD.HiLo)) + 
+  geom_line(aes(color=AD.HiLo)) + 
+  geom_ribbon(aes(ymin=fit-se,ymax=fit+se, fill=AD.HiLo), alpha=.2) + 
+  ggtitle('Standard AD PGS') + theme_bw() + theme(plot.title=element_text(hjust=0.5), 
+                                                                panel.grid.major = element_blank(),
+                                                                panel.grid.minor = element_blank(), 
+                                                                panel.border = element_rect(fill=NA, colour='NA'),
+                                                                axis.line=element_line(size=1, colour='grey80'), legend.title=element_blank()) + scale_x_continuous(name= 'Time (years)', limits=c(0,6)) + scale_y_continuous(name='Cognition Comp Score', limits=c(40,60))
+
+dev.off()
+
+
+{plot(fitted(model_AD_comptscore_1a), resid(model_AD_comptscore_1a),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_AD_comptscore_1a), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_AD_comptscore_1a), col='darkgrey')
+qqline(resid(model_AD_comptscore_1a),col='dodgerblue', lwd=)}
+
+
+
+###Infl
+ss <- subset(myData.qi, !is.na(comptscore) & BLCogn==1, select=c(Infl.HiLo,assessment))
+table(ss$Infl.HiLo, ss$assessment)
+
+ggplot(myData.qi[which(myData.qi$BLCogn==1),], aes(x=time.in.years, y=comptscore)) + 
+  geom_point(aes(shape=Infl.HiLo, color=Infl.HiLo)) + 
+  geom_smooth(method=lm, aes(colour=Infl.HiLo, fill=Infl.HiLo), fullrange=TRUE) + 
+  scale_x_continuous(breaks=seq(0,8,by=2))
+
+ggplot(myData.qi[which(myData.qi$BLCogn==1),], aes(x=time.in.years, y=comptscore, group=StrippedID)) + 
+  geom_line(aes(color=Infl.HiLo)) + scale_x_continuous(breaks=seq(0,8,by=2))
+
+#Including only if baseline data is available (BLCogn==1)
+model_Infl_comptscore_1a <- lmer( comp_Tscore_w_VOSP ~ Infl.HiLo * time.in.years + edu_years + age_at_baseline + Sex + apoe4  + (1|StrippedID), data = myData.qi[which(myData.qi$BLCogn==1),])
+summary(model_Infl_comptscore_1a)
+confint(model_Infl_comptscore_1a)
+
+model_Infl_comptscore_1b <- lmer( comp_Tscore_w_VOSP ~ Infl.HiLo * time.in.years + edu_years + age_at_baseline + Sex + apoe4  + (time.in.years|StrippedID), data = myData.qi[which(myData.qi$BLCogn==1),], control = lmerControl(check.nobs.vs.nRE = "ignore"))
+summary(model_Infl_comptscore_1b)
+
+BIC(model_Infl_comptscore_1a, model_Infl_comptscore_1b)
+logLik(model_Infl_comptscore_1a)
+logLik(model_Infl_comptscore_1b)
+teststat <- -2* (as.numeric(logLik(model_Infl_comptscore_1a))- as.numeric(logLik(model_Infl_comptscore_1b)))
+(p.val <- pchisq(teststat, df = 2, lower.tail = FALSE))
+lrtest(model_Infl_comptscore_1a, model_Infl_comptscore_1b)
+
+model_Infl_comptscore_2 <- lmer(comp_Tscore_w_VOSP ~ Infl.HiLo * time.in.years + edu_years + age_at_baseline + Sex + apoe4*time.in.years + (1|StrippedID), data = myData.qi[which(myData.qi$BLCogn==1),])
+summary(model_Infl_comptscore_2)
+confint(model_Infl_comptscore_2)
+
+model_Infl_comptscore.fixed <- effect('Infl.HiLo * time.in.years', model_Infl_comptscore_1a, xlevels=list(time.in.years=seq(0,6,2)))
+model_Infl_comptscore.fixed <- as.data.frame(model_Infl_comptscore.fixed)
+
+tiff(filename='M:/Documents/PGRS/Long_Cogn_INF.tiff', width=2000, height=2000, res=300)
+ggplot(model_Infl_comptscore.fixed, aes(x=time.in.years, y=fit, group=Infl.HiLo)) + 
+  geom_line(aes(color=Infl.HiLo)) + 
+  geom_ribbon(aes(ymin=fit-se,ymax=fit+se, fill=Infl.HiLo), alpha=.2) + 
+  ggtitle('Inflammatory informed AD PGS') + theme_bw() + theme(plot.title=element_text(hjust=0.5), 
+                                                                panel.grid.major = element_blank(),
+                                                                panel.grid.minor = element_blank(), 
+                                                                panel.border = element_rect(fill=NA, colour='NA'),
+                                                                axis.line=element_line(size=1, colour='grey80'), legend.title=element_blank()) + scale_x_continuous(name= 'Time (years)', limits=c(0,6)) + scale_y_continuous(name='Cognition Comp Score', limits=c(40,60))
+
+dev.off()
+
+
+{plot(fitted(model_Infl_comptscore_1a), resid(model_Infl_comptscore_1a),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_Infl_comptscore_1a), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_Infl_comptscore_1a), col='darkgrey')
+qqline(resid(model_Infl_comptscore_1a),col='dodgerblue', lwd=)}
+
+
+###CVD
+ss <- subset(myData.qc, !is.na(comptscore) & BLCogn==1, select=c(CVD.HiLo,assessment))
+table(ss$CVD.HiLo, ss$assessment)
+
+ggplot(myData.qc[which(myData.qc$BLCogn==1),], aes(x=time.in.years, y=comptscore)) + 
+  geom_point(aes(shape=CVD.HiLo, color=CVD.HiLo)) + 
+  geom_smooth(method=lm, aes(colour=CVD.HiLo, fill=CVD.HiLo), fullrange=TRUE) + 
+  scale_x_continuous(breaks=seq(0,8,by=2))
+
+ggplot(myData.qc[which(myData.qc$BLCogn==1),], aes(x=time.in.years, y=comptscore, group=StrippedID)) + geom_line(aes(color=CVD.HiLo)) + scale_x_continuous(breaks=seq(0,8,by=2))
+
+#Including only if baseline data is available (BLCogn==1)
+model_CVD_comptscore_1a <- lmer( comp_Tscore_w_VOSP ~ CVD.HiLo * time.in.years + edu_years + age_at_baseline + Sex +  apoe4  +(1|StrippedID), data = myData.qc[which(myData.qc$BLCogn==1),])
+summary(model_CVD_comptscore_1a)
+confint(model_CVD_comptscore_1a)
+
+model_CVD_comptscore_1b <- lmer( comp_Tscore_w_VOSP ~ CVD.HiLo * time.in.years + edu_years + age_at_baseline + Sex +  apoe4  +(time.in.years|StrippedID), data = myData.qc[which(myData.qc$BLCogn==1),], control = lmerControl(check.nobs.vs.nRE = "ignore"))
+summary(model_CVD_comptscore_1b)
+
+BIC(model_CVD_comptscore_1a, model_CVD_comptscore_1b)
+logLik(model_CVD_comptscore_1a)
+logLik(model_CVD_comptscore_1b)
+teststat <- -2* (as.numeric(logLik(model_CVD_comptscore_1a))- as.numeric(logLik(model_CVD_comptscore_1b)))
+(p.val <- pchisq(teststat, df = 2, lower.tail = FALSE))
+lrtest(model_CVD_comptscore_1a, model_CVD_comptscore_1b)
+
+model_CVD_comptscore_2 <- lmer( comp_Tscore_w_VOSP ~ CVD.HiLo * time.in.years + edu_years + age_at_baseline + Sex + apoe4*time.in.years + (1|StrippedID), data = myData.qc[which(myData.qc$BLCogn==1),])
+summary(model_CVD_comptscore_2)
+confint(model_CVD_comptscore_2)
+
+model_CVD_comptscore.fixed <- effect('CVD.HiLo * time.in.years', model_CVD_comptscore_1a, xlevels=list(time.in.years=seq(0,6,2)))
+model_CVD_comptscore.fixed <- as.data.frame(model_CVD_comptscore.fixed)
+
+tiff(filename='M:/Documents/PGRS/Long_Cogn_CVD.tiff', width=2000, height=2000, res=300)
+ggplot(model_CVD_comptscore.fixed, aes(x=time.in.years, y=fit, group=CVD.HiLo)) + 
+  geom_line(aes(color=CVD.HiLo)) + 
+  geom_ribbon(aes(ymin=fit-se,ymax=fit+se, fill=CVD.HiLo), alpha=.2) + 
+  ggtitle('CVD informed AD PGS') + theme_bw() +
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major =
+          element_blank(),panel.grid.minor = element_blank(), panel.border =
+          element_rect(fill=NA, colour='NA'), axis.line=element_line(size=1,
+colour='grey80'), legend.title=element_blank()) + scale_x_continuous(name= 'Time (years)', limits=c(0,6)) + scale_y_continuous(name='Cognition Comp Score', limits=c(40,60))
+dev.off()
+
+{plot(fitted(model_CVD_comptscore_1a), resid(model_CVD_comptscore_2),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_CVD_comptscore_1a), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_CVD_comptscore_1a), col='darkgrey')
+qqline(resid(model_CVD_comptscore_1a),col='dodgerblue', lwd=)}
+
+```
+
+
+
+
+
+```{r, attr.source='.numberLines'}
+
+
+### AD MTC - ASHS & COMBAT - NO STAGE
+###################################
+
+## AD
+
+ss <- subset(myData.qa, !is.na(MTC.AD_no_stag) & !is.na(ScannerNumber) & BLASHS==1, 
+             select=c(AD.HiLo,assessment))
+table(ss$AD.HiLo, ss$assessment)
+
+myData.qa %>%  subset(ScannerNumber !='NA' & BLASHS==1) %>% 
+  ggplot(aes(x=time.in.years, y=MTC.AD_no_stag)) + 
+  geom_point(aes(shape=AD.HiLo, color=AD.HiLo)) + 
+  geom_smooth(method=lm, aes(colour=AD.HiLo, fill=AD.HiLo), fullrange=TRUE) + 
+  ggtitle('Raw data - AD score') + theme_bw() + theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Time (years)', limits=c(0,6)) +
+  scale_y_continuous(name='MTC ASHS', limits=c(1500,5000))
+
+
+myData.qa %>%   subset(ScannerNumber!='NA' & BLASHS==1)%>% 
+  ggplot(aes(x=time.in.years, y=MTC.AD_no_stag, group=StrippedID)) + 
+  geom_line(aes(color=AD.HiLo)) + 
+  scale_x_continuous(breaks=seq(1,3,by=1))
+
+#Including only if baseline data is available (BLASHS==1)
+model_AD_MTC_ashs_1a <- lmer( MTC.AD_no_stag ~ AD.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4 + (1|StrippedID), data = myData.qa[which(myData.qa$BLASHS==1),])
+summary(model_AD_MTC_ashs_1a)
+confint(model_AD_MTC_ashs_1a)
+
+model_AD_MTC_ashs_1b <- lmer( MTC.AD_no_stag ~ AD.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4 + (time.in.years|StrippedID) , data = myData.qa[which(myData.qa$BLASHS==1),], control = lmerControl(check.nobs.vs.nRE = "ignore"))
+summary(model_AD_MTC_ashs_1b)
+
+BIC(model_AD_MTC_ashs_1a,model_AD_MTC_ashs_1b)
+logLik(model_AD_MTC_ashs_1a)
+logLik(model_AD_MTC_ashs_1b)
+#df=12-10=2
+teststat <- -2* (as.numeric(logLik(model_AD_MTC_ashs_1a))- as.numeric(logLik(model_AD_MTC_ashs_1b)))
+(p.val <- pchisq(teststat, df = 2, lower.tail = FALSE))
+lrtest(model_AD_MTC_ashs_1a, model_AD_MTC_ashs_1b)
+
+model_AD_MTC_ashs_2 <- lmer( MTC.AD_no_stag ~ AD.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4*time.in.years + (1|StrippedID) , data = myData.qa[which(myData.qa$BLASHS==1),])
+summary(model_AD_MTC_ashs_2)
+confint(model_AD_MTC_ashs_2)
+
+model_AD_MTC_ashs.fixed <- effect('AD.HiLo * time.in.years', model_AD_MTC_ashs_1a, xlevels=list(time.in.years=seq(0,6,2)))
+model_AD_MTC_ashs.fixed <- as.data.frame(model_AD_MTC_ashs.fixed)
+
+tiff(filename='M:/Documents/PGRS/Long_MTC_AD.tiff', width=2000, height=2000, res=300)
+ggplot(model_AD_MTC_ashs.fixed, aes(x=time.in.years, y=fit, group=AD.HiLo)) + 
+  geom_line(aes(color=AD.HiLo)) + 
+  geom_ribbon(aes(ymin=fit-se,ymax=fit+se, fill=AD.HiLo), alpha=.2) + 
+  ggtitle('Standard AD PGS') + theme_bw() + theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, colour='NA'), axis.line=element_line(size=1, colour='grey80'),
+        legend.title=element_blank()) +
+  scale_x_continuous(name= 'Time (years)', limits=c(0,6)) +
+  scale_y_continuous(name='MTC Volume (mm3)', limits=c(2500,3500))
+
+dev.off()
+
+{plot(fitted(model_AD_MTC_ashs_1a), resid(model_AD_MTC_ashs_1a),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_AD_MTC_ashs_1a), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_AD_MTC_ashs_1a), col='darkgrey')
+qqline(resid(model_AD_MTC_ashs_1a),col='dodgerblue', lwd=)}
+
+
+
+
+## Infl
+
+ss <- subset(myData.qi, !is.na(MTC.Infl_no_stag) & !is.na(ScannerNumber) & BLASHS==1, 
+             select=c(Infl.HiLo,assessment))
+table(ss$Infl.HiLo, ss$assessment)
+
+myData.qi %>%  subset(ScannerNumber!='NA' & BLASHS==1) %>% 
+  ggplot(aes(x=time.in.years, y=MTC.Infl_no_stag)) + 
+  geom_point(aes(shape=Infl.HiLo, color=Infl.HiLo)) + 
+  geom_smooth(method=lm, aes(colour=Infl.HiLo, fill=Infl.HiLo), fullrange=TRUE) + ggtitle('Raw data - Infl score') + theme_bw() + theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Time (years)', limits=c(0,6)) +
+  scale_y_continuous(name='MTC ASHS', limits=c(1500,5000))
+
+
+myData.qi %>%   subset(ScannerNumber!='NA' & BLASHS==1)%>% 
+  ggplot(aes(x=time.in.years, y=MTC.Infl_no_stag, group=StrippedID)) + 
+  geom_line(aes(color=Infl.HiLo)) + 
+  scale_x_continuous(breaks=seq(1,3,by=1))
+
+#Including only if baseline data is available (BLASHS==1)
+model_Infl_MTC_ashs_1a <- lmer( MTC.Infl_no_stag ~ Infl.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4  + (1|StrippedID), data = myData.qi[which(myData.qi$BLASHS==1),])
+summary(model_Infl_MTC_ashs_1a)
+confint(model_Infl_MTC_ashs_1a)
+
+model_Infl_MTC_ashs_1b <- lmer( MTC.Infl_no_stag ~ Infl.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4  + (time.in.years|StrippedID), data = myData.qi[which(myData.qi$BLASHS==1),], control = lmerControl(check.nobs.vs.nRE = "ignore"))
+summary(model_Infl_MTC_ashs_1b)
+
+BIC(model_Infl_MTC_ashs_2, model_Infl_MTC_ashs_3)
+
+logLik(model_Infl_MTC_ashs_1a)
+logLik(model_Infl_MTC_ashs_1b)
+teststat <- -2* (as.numeric(logLik(model_Infl_MTC_ashs_1a))- as.numeric(logLik(model_Infl_MTC_ashs_1b)))
+(p.val <- pchisq(teststat, df = 2, lower.tail = FALSE))
+lrtest(model_Infl_MTC_ashs_1a, model_Infl_MTC_ashs_1b)
+
+model_Infl_MTC_ashs_2 <- lmer( MTC.Infl_no_stag ~ Infl.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4*time.in.years + (1|StrippedID), data = myData.qi[which(myData.qi$BLASHS==1),])
+summary(model_Infl_MTC_ashs_2)
+confint(model_Infl_MTC_ashs_2)
+
+model_Infl_MTC_ashs.fixed <- effect('Infl.HiLo * time.in.years', model_Infl_MTC_ashs_1a, xlevels=list(time.in.years=seq(0,6,2)))
+model_Infl_MTC_ashs.fixed <- as.data.frame(model_Infl_MTC_ashs.fixed)
+
+tiff(filename='M:/Documents/PGRS/Long_MTC_INF.tiff', width=2000, height=2000, res=300)
+ggplot(model_Infl_MTC_ashs.fixed, aes(x=time.in.years, y=fit, group=Infl.HiLo)) + 
+  geom_line(aes(color=Infl.HiLo)) + 
+  geom_ribbon(aes(ymin=fit-se,ymax=fit+se, fill=Infl.HiLo), alpha=.2) + 
+  ggtitle('Inflammatory informed AD PGS') + theme_bw() + theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, colour='NA'),axis.line=element_line(size=1, colour='grey80'),
+        legend.title=element_blank()) +
+  scale_x_continuous(name= 'Time (years)', limits=c(0,6)) +
+  scale_y_continuous(name='MTC Volume (mm3)', limits=c(2500,3500))
+dev.off()
+
+
+{plot(fitted(model_Infl_MTC_ashs_1a), resid(model_Infl_MTC_ashs_2),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_Infl_MTC_ashs_1a), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_Infl_MTC_ashs_1a), col='darkgrey')
+qqline(resid(model_Infl_MTC_ashs_1a),col='dodgerblue', lwd=)}
+
+
+## CVD
+
+ss <- subset(myData.qc, !is.na(MTC.CVD_no_stag) & !is.na(ScannerNumber) & BLASHS==1, select=c(CVD.HiLo,assessment))
+table(ss$CVD.HiLo, ss$assessment)
+
+myData.qc %>%  subset(ScannerNumber!='NA' & BLASHS==1) %>% 
+  ggplot(aes(x=time.in.years, y=MTC.CVD_no_stag)) + 
+  geom_point(aes(shape=CVD.HiLo, color=CVD.HiLo)) + 
+  geom_smooth(method=lm, aes(colour=CVD.HiLo, fill=CVD.HiLo), fullrange=TRUE) + 
+  ggtitle('Raw data - CVD score') + theme_bw() + theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Time (years)', limits=c(0,6)) +
+  scale_y_continuous(name='MTC ASHS', limits=c(1500,5000))
+
+
+myData.qc %>%   subset(ScannerNumber!='NA' & BLASHS==1)%>% 
+  ggplot(aes(x=time.in.years, y=MTC.CVD_no_stag, group=StrippedID)) + 
+  geom_line(aes(color=CVD.HiLo)) + 
+  scale_x_continuous(breaks=seq(1,3,by=1))
+
+#Including only if baseline data is available (BLASHS==1)
+model_CVD_MTC_ashs_1a <- lmer( MTC.CVD_no_stag ~ CVD.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4 + (1|StrippedID), data = myData.qc[which(myData.qc$BLASHS==1),])
+summary(model_CVD_MTC_ashs_1a)
+confint(model_CVD_MTC_ashs_1a)
+
+model_CVD_MTC_ashs_1b <- lmer( MTC.CVD_no_stag ~ CVD.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4 + (time.in.years|StrippedID), data = myData.qc[which(myData.qc$BLASHS==1),], control = lmerControl(check.nobs.vs.nRE = "ignore"))
+summary(model_CVD_MTC_ashs_1b)
+
+BIC(model_CVD_MTC_ashs_1a, model_CVD_MTC_ashs_1b)
+logLik(model_CVD_MTC_ashs_1a)
+logLik(model_CVD_MTC_ashs_1b)
+teststat <- -2* (as.numeric(logLik(model_CVD_MTC_ashs_1a))- as.numeric(logLik(model_CVD_MTC_ashs_1b)))
+(p.val <- pchisq(teststat, df = 2, lower.tail = FALSE))
+lrtest(model_CVD_MTC_ashs_1a, model_CVD_MTC_ashs_1b)
+
+
+model_CVD_MTC_ashs_2 <- lmer( MTC.CVD_no_stag ~ CVD.HiLo * time.in.years + age_at_baseline + icv + Sex + apoe4*time.in.years + (1|StrippedID),data = myData.qc[which(myData.qc$BLASHS==1),])
+summary(model_CVD_MTC_ashs_2)
+confint(model_CVD_MTC_ashs_2)
+
+model_CVD_MTC_ashs.fixed <- effect('CVD.HiLo * time.in.years', model_CVD_MTC_ashs_1a, xlevels=list(time.in.years=seq(0,6,2)))
+model_CVD_MTC_ashs.fixed <- as.data.frame(model_CVD_MTC_ashs.fixed)
+
+tiff(filename='M:/Documents/PGRS/Long_MTC_CVD.tiff', width=2000, height=2000, res=300)
+ggplot(model_CVD_MTC_ashs.fixed, aes(x=time.in.years, y=fit, group=CVD.HiLo)) + 
+  geom_line(aes(color=CVD.HiLo)) + 
+  geom_ribbon(aes(ymin=fit-se,ymax=fit+se, fill=CVD.HiLo), alpha=.2) + 
+  ggtitle('CVD enriched AD PGS') + theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80'),
+        legend.title=element_blank()) +
+  scale_x_continuous(name= 'Time (years)', limits=c(0,6)) +
+  scale_y_continuous(name='MTC Volume (mm3)', limits=c(2500,3500))
+
+dev.off()
+
+
+{plot(fitted(model_CVD_MTC_ashs_1a), resid(model_CVD_MTC_ashs_2),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_CVD_MTC_ashs_1a), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_CVD_MTC_ashs_1a), col='darkgrey')
+qqline(resid(model_CVD_MTC_ashs_1a),col='dodgerblue', lwd=)}
+
+
+```
+
+
+```{r, attr.source='.numberLines'}
+
+##########################
+### Cross-sectional
+##########################
+
+
+### Innotest Ab42
+####################
+
+### AD
+tiff(filename='M:/Documents/PGRS/Cross_Abeta_AD.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLtau==1),], aes( x=AD.PGRS, y=Innotest_abeta42)) + geom_point() + geom_smooth(method=lm, se=TRUE) + theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Standard AD PGS', limits=c(-3.3,3.3)) +
+  scale_y_continuous(name='CSF Abeta42', limits=c(0,2000))
+
+dev.off()
+
+model_AD_ab42_cont_cross <- lm(Innotest_abeta42 ~ AD.PGRS  + age + apoe4_num , data = myData.cross[which(myData.cross$BLtau==1),])
+summary(model_AD_ab42_cont_cross)
+confint(model_AD_ab42_cont_cross)
+
+
+{plot(fitted(model_AD_ab42_cont_cross), resid(model_AD_ab42_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_AD_ab42_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_AD_ab42_cont_cross), col='darkgrey')
+qqline(resid(model_AD_ab42_cont_cross),col='dodgerblue', lwd=)}
+
+```
+
+```{r, attr.source='.numberLines'}
+
+### Infl
+tiff(filename='M:/Documents/PGRS/Cross_Abeta_INF.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLtau==1),], aes( x=Infl.PGRS, y=Innotest_abeta42)) + geom_point() +
+  geom_smooth(method=lm, se=TRUE) + theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Inflammatory informed AD PGS', limits=c(-3.3,3.3)) +
+  scale_y_continuous(name='CSF Abeta42', limits=c(0,2000))
+
+dev.off()
+
+model_Infl_ab42_cont_cross <- lm(Innotest_abeta42 ~ Infl.PGRS  + age + apoe4_num , data = myData.cross[which(myData.cross$BLtau==1),])
+summary(model_Infl_ab42_cont_cross)
+confint(model_Infl_ab42_cont_cross)
+print_md(model_parameters(model_Infl_ab42_cont_cross), pretty_names=TRUE, select='short')
+
+{plot(fitted(model_Infl_ab42_cont_cross), resid(model_Infl_ab42_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_Infl_ab42_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_Infl_ab42_cont_cross), col='darkgrey')
+qqline(resid(model_Infl_ab42_cont_cross),col='dodgerblue', lwd=)}
+
+```
+
+
+```{r, attr.source='.numberLines'}
+
+### CVD
+tiff(filename='M:/Documents/PGRS/Cross_Abeta_CVD.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLtau==1),], aes( x=CVD.PGRS, y=Innotest_abeta42)) + geom_point() +
+  geom_smooth(method=lm, se=TRUE) + theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'CVD informed AD PGS', limits=c(-3.3,3.3)) +
+  scale_y_continuous(name='CSF Abeta42', limits=c(0,2000))
+
+dev.off()
+
+model_CVD_ab42_cont_cross <- lm(Innotest_abeta42 ~ CVD.PGRS  + age + apoe4_num , data = myData.cross[which(myData.cross$BLtau==1),])
+summary(model_CVD_ab42_cont_cross)
+confint(model_CVD_ab42_cont_cross)
+
+
+
+{plot(fitted(model_CVD_ab42_cont_cross), resid(model_CVD_ab42_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_CVD_ab42_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_CVD_ab42_cont_cross), col='darkgrey')
+qqline(resid(model_CVD_ab42_cont_cross),col='dodgerblue', lwd=)}
+
+```
+
+
+
+```{r, attr.source='.numberLines'}
+
+### COMP T-SCORE
+##################
+
+
+###AD
+tiff(filename='M:/Documents/PGRS/Cross_Cogn_AD.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLCogn==1),], aes( x=AD.PGRS, y=comp_Tscore_w_VOSP)) + geom_point() +
+  geom_smooth(method=lm, se=TRUE)+ theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Standard AD PGS', limits=c(-3.3,3.3)) +
+  scale_y_continuous(name='Cognitive composition T-score', limits=c(20,70)) 
+
+dev.off()
+
+model_AD_compscore_cont_cross <- lm( comp_Tscore_w_VOSP ~ AD.PGRS  + age + edu_years + Sex + apoe4_num , data = myData.cross[which(myData.cross$BLCogn==1),])
+summary(model_AD_compscore_cont_cross)
+confint(model_AD_compscore_cont_cross)
+
+
+{plot(fitted(model_AD_compscore_cont_cross), resid(model_AD_compscore_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+
+hist(resid(model_AD_compscore_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_AD_compscore_cont_cross), col='darkgrey')
+qqline(resid(model_AD_compscore_cont_cross),col='dodgerblue', lwd=)}
+
+```
+
+
+
+```{r, attr.source='.numberLines'}
+### Infl
+tiff(filename='M:/Documents/PGRS/Cross_Cogn_INF.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLCogn==1),], aes( x=Infl.PGRS, y=comp_Tscore_w_VOSP)) + geom_point() +
+  geom_smooth(method=lm, se=TRUE) + theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Inflammatory informed AD PGS', limits=c(-3.3,3.3)) +
+  scale_y_continuous(name='Cognitive composition T-score', limits=c(20,70)) 
+
+dev.off()
+
+model_Infl_compscore_cont_cross <- lm(comp_Tscore_w_VOSP ~ Infl.PGRS  + age + edu_years + Sex + apoe4_num , data = myData.cross[which(myData.cross$BLCogn==1),])
+summary(model_Infl_compscore_cont_cross)
+confint(model_Infl_compscore_cont_cross)
+
+
+{plot(fitted(model_Infl_compscore_cont_cross), resid(model_Infl_compscore_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_Infl_compscore_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_Infl_compscore_cont_cross), col='darkgrey')
+qqline(resid(model_Infl_compscore_cont_cross),col='dodgerblue', lwd=)}
+
+```
+
+
+```{r, attr.source='.numberLines'}
+
+### CVD
+tiff(filename='M:/Documents/PGRS/Cross_Cogn_CVD.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLCogn==1),], aes( x=CVD.PGRS, y=comp_Tscore_w_VOSP)) + geom_point() +
+  geom_smooth(method=lm, se=TRUE) + theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'CVD informed AD PGS', limits=c(-3.3,3.3)) +
+  scale_y_continuous(name='Cognitive composition T-score', limits=c(20,70))
+dev.off()
+
+model_CVD_compscore_cont_cross <- lm(comp_Tscore_w_VOSP ~ CVD.PGRS  + age + edu_years + Sex + apoe4_num , data = myData.cross[which(myData.cross$BLCogn==1),])
+summary(model_CVD_compscore_cont_cross)
+confint(model_CVD_compscore_cont_cross)
+
+
+{plot(fitted(model_CVD_compscore_cont_cross), resid(model_CVD_compscore_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_CVD_compscore_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_CVD_compscore_cont_cross), col='darkgrey')
+qqline(resid(model_CVD_compscore_cont_cross),col='dodgerblue', lwd=)}
+
+```
+
+
+
+```{r, attr.source='.numberLines'}
+
+
+### MTC - ASHS & COMBAT - NO STAGE
+#################################
+
+
+###AD
+tiff(filename='M:/Documents/PGRS/Cross_MTC_AD.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLASHS==1),], aes( x=AD.PGRS, y=MTC.AD_no_stag)) + geom_point() + geom_smooth(method=lm, se=TRUE) + theme_bw() + theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, colour='NA'), axis.line=element_line(size=1, colour='grey80')) + scale_x_continuous(name= 'Standard AD PGS', limits=c(-3.3,3.3)) + scale_y_continuous(name='MTC volume (mm3)', limits=c(1500,5000))
+dev.off()
+
+model_AD_MTC_cont_cross <- lm( MTC.AD_no_stag ~ AD.PGRS  + age + icv + Sex + apoe4_num, data = myData.cross[which(myData.cross$BLASHS==1),])
+summary(model_AD_MTC_cont_cross)
+confint(model_AD_MTC_cont_cross)
+
+
+{plot(fitted(model_AD_MTC_cont_cross), resid(model_AD_MTC_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_AD_MTC_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_AD_MTC_cont_cross), col='darkgrey')
+qqline(resid(model_AD_MTC_cont_cross),col='dodgerblue', lwd=)}
+
+
+### Infl
+tiff(filename='M:/Documents/PGRS/Cross_MTC_INF.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLASHS==1),], aes( x=Infl.PGRS, y=MTC.Infl_no_stag)) + geom_point() + 
+  geom_smooth(method=lm, se=TRUE) + theme_bw() + 
+  theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA,
+        colour='NA'), axis.line=element_line(size=1, colour='grey80')) +
+  scale_x_continuous(name= 'Inflammatory informed PGS', limits=c(-3.3,3.3)) +
+  scale_y_continuous(name='MTC volume (mm3)', limits=c(1500,5000))
+dev.off()
+
+model_Infl_MTC_cont_cross <- lm(MTC.Infl_no_stag ~ Infl.PGRS  + age + icv + Sex + apoe4_num , data = myData.cross[which(myData.cross$BLASHS==1),])
+summary(model_Infl_MTC_cont_cross)
+confint(model_Infl_MTC_cont_cross)
+
+
+plot(model_Infl_MTC_cont_cross, id=0.025, idLabels=NULL)
+{plot(fitted(model_Infl_MTC_cont_cross), resid(model_Infl_MTC_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_Infl_MTC_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_Infl_MTC_cont_cross), col='darkgrey')
+qqline(resid(model_Infl_MTC_cont_cross),col='dodgerblue', lwd=)}
+
+
+```
+
+
+
+```{r, attr.source='.numberLines'}
+
+### CVD
+tiff(filename='M:/Documents/PGRS/Cross_MTC_CVD.tiff', width=2000, height=2000, res=300)
+ggplot(myData.cross[which(myData.cross$BLASHS==1),], aes( x=CVD.PGRS, y=MTC.CVD_no_stag)) + geom_point() + geom_smooth(method=lm, se=TRUE) + theme_bw() + theme(plot.title=element_text(hjust=0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_rect(fill=NA, colour='NA'), axis.line=element_line(size=1, colour='grey80')) + scale_x_continuous(name= 'CVD informed AD PGS', limits=c(-3.3,3.3)) + scale_y_continuous(name='MTC volume (mm3)', limits=c(1500,5000))
+dev.off()
+
+
+model_CVD_MTC_cont_cross <- lm(MTC.CVD_no_stag ~ CVD.PGRS  + age + icv + Sex  + apoe4_num , data = myData.cross[which(myData.cross$BLASHS==1),])
+summary(model_CVD_MTC_cont_cross)
+confint(model_CVD_MTC_cont_cross)
+
+
+{plot(fitted(model_CVD_MTC_cont_cross), resid(model_CVD_MTC_cont_cross),col='grey', pch=20, main='M') 
+abline(h=0, col='darkorange', lwd=2)}
+hist(resid(model_CVD_MTC_cont_cross), col='darkorange', border='dodgerblue', breaks=20)
+{qqnorm(resid(model_CVD_MTC_cont_cross), col='darkgrey')
+qqline(resid(model_CVD_MTC_cont_cross),col='dodgerblue', lwd=)}
+
+```
+
+
+
+
+
+```{r, attr.source='.numberLines'}
+
+##########################################
+## Common subjects in 'HI' and 'LO' groups
+##########################################
+
+## Number of 'HI' and 'LO' of AD PGRS
+table(myData$AD.HiLo[which(myData$assessment==1,)])
+
+## Number of 'HI' and 'LO' of Infl PGRS
+table(myData$Infl.HiLo[which(myData$assessment==1,)])
+
+## Number of 'HI' and 'LO' of CVD PGRS
+table(myData$CVD.HiLo[which(myData$assessment==1,)])
+
+
+
+## 'HI' in AD and Infl
+intersect(myData$StrippedID[myData$AD.HiLo=='HI'], myData$StrippedID[myData$Infl.HiLo=='HI'])
+
+
+## 'HI' in AD and CVD
+intersect(myData$StrippedID[myData$AD.HiLo=='HI'], myData$StrippedID[myData$CVD.HiLo=='HI'])
+
+## 'HI' in Infl and CVD
+intersect(myData$StrippedID[myData$CVD.HiLo=='HI'], myData$StrippedID[myData$Infl.HiLo=='HI'])
+
+## 'HI' in AD, Infl and CVD
+intersect(myData$StrippedID[myData$CVD.HiLo=='HI'],
+          intersect(myData$StrippedID[myData$AD.HiLo=='HI'], 
+                    myData$StrippedID[myData$Infl.HiLo=='HI']))
+
+
+## 'LO' in AD and Infl
+intersect(myData$StrippedID[myData$AD.HiLo=='LO'], myData$StrippedID[myData$Infl.HiLo=='LO'])
+
+
+## 'LO' in AD and CVD
+intersect(myData$StrippedID[myData$AD.HiLo=='LO'], myData$StrippedID[myData$CVD.HiLo=='LO'])
+
+## 'LO' in Infl and CVD
+intersect(myData$StrippedID[myData$CVD.HiLo=='LO'], myData$StrippedID[myData$Infl.HiLo=='LO'])
+
+## 'LO' in AD, Infl and CVD
+intersect(myData$StrippedID[myData$CVD.HiLo=='LO'],
+          intersect(myData$StrippedID[myData$AD.HiLo=='LO'], 
+                    myData$StrippedID[myData$Infl.HiLo=='LO']))
+```
+
+
+
+```{r, attr.source='.numberLines'}
+
+### Demographics
+
+#Difference for Cognitive Comp Score with and without VOSP
+t.test(myData[which(myData$assessment==1),]$comp_Tscore_wo_VOSP, myData[which(myData$assessment==1),]$comp_Tscore_w_VOSP)
+
+
+### Age - mean/sd, T-tests
+ggplot(myData.qa[which(myData.qa$assessment==1),], aes(AD.HiLo , age)) + geom_boxplot()
+ggplot(myData.qi[which(myData.qi$assessment==1),], aes(Infl.HiLo , age)) + geom_boxplot()
+ggplot(myData.qc[which(myData.qc$assessment==1),], aes(CVD.HiLo , age)) + geom_boxplot()
+
+
+nrow(myData.cross[which(!is.na(myData.cross$age))])
+sapply((myData.cross %>% select(age)), mean, na.rm=TRUE)
+sapply((myData.cross %>% select(age)), sd, na.rm=TRUE)
+
+
+sapply((myData.qa %>%   select(age) %>% filter(myData.qa$AD.HiLo=='HI' & myData.qa$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qa %>% select(age) %>% filter(myData.qa$AD.HiLo=='HI' & myData.qa$assessment==1)), sd,
+       na.rm=TRUE)
+sapply((myData.qa %>%   select(age) %>% filter(myData.qa$AD.HiLo=='LO' & myData.qa$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qa %>% select(age) %>% filter(myData.qa$AD.HiLo=='LO' & myData.qa$assessment==1)), sd,
+       na.rm=TRUE)
+table(myData.qa$AD.HiLo[which(myData.qa$assessment==1 & !is.na(myData.qa$age))])
+
+
+sapply((myData.qi %>%   select(age) %>% filter(myData.qi$Infl.HiLo=='HI' & myData.qi$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qi %>% select(age) %>% filter(myData.qi$Infl.HiLo=='HI' & myData.qi$assessment==1)), sd,
+       na.rm=TRUE)
+sapply((myData.qi %>%   select(age) %>% filter(myData.qi$Infl.HiLo=='LO' & myData.qi$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qi %>% select(age) %>% filter(myData.qi$Infl.HiLo=='LO' & myData.qi$assessment==1)), sd,
+       na.rm=TRUE)
+table(myData.qi$Infl.HiLo[which(myData.qi$assessment==1 & !is.na(myData.qi$age))])
+
+sapply((myData.qc %>%   select(age) %>% filter(myData.qc$CVD.HiLo=='HI' & myData.qc$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qc %>% select(age) %>% filter(myData.qc$CVD.HiLo=='HI' & myData.qc$assessment==1)), sd,
+       na.rm=TRUE)
+sapply((myData.qc %>%   select(age) %>% filter(myData.qc$CVD.HiLo=='LO' & myData.qc$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qc %>% select(age) %>% filter(myData.qc$CVD.HiLo=='LO' & myData.qc$assessment==1)), sd,
+       na.rm=TRUE)
+table(myData.qc$CVD.HiLo[which(myData.qc$assessment==1 & !is.na(myData.qc$age))])
+
+
+leveneTest(myData.qa[which(myData.qa$assessment==1),]$age ~ myData.qa[which(myData.qa$assessment==1),]$AD.HiLo)
+leveneTest(myData.qi[which(myData.qi$assessment==1),]$age ~ myData.qi[which(myData.qi$assessment==1),]$Infl.HiLo)
+leveneTest(myData.qc[which(myData.qc$assessment==1),]$age ~ myData.qc[which(myData.qc$assessment==1),]$CVD.HiLo)
+
+t.test(myData.qa[which(myData.qa$assessment==1),]$age[myData.qa$AD.HiLo=='HI'],
+       myData.qa[which(myData.qa$assessment==1),]$age[myData.qa$AD.HiLo=='LO'])
+
+t.test(myData.qi[which(myData.qi$assessment==1),]$age[myData.qi$Infl.HiLo=='HI'],
+       myData.qi[which(myData.qi$assessment==1),]$age[myData.qi$Infl.HiLo=='LO'])
+
+t.test(myData.qc[which(myData.qc$assessment==1),]$age[myData.qc$CVD.HiLo=='HI'],
+       myData.qc[which(myData.qc$assessment==1),]$age[myData.qc$CVD.HiLo=='LO'])
+```
+
+
+
+
+```{r, attr.source='.numberLines'}
+
+### FRS - mean/sd, T-tests
+hist(myData.cross$frs_simp_total_wo_age)
+
+ggplot(myData.qa[which(myData.qa$assessment==1),], aes(AD.HiLo , frs_simp_total_wo_age)) + geom_boxplot()
+ggplot(myData.qi[which(myData.qa$assessment==1),], aes(Infl.HiLo , frs_simp_total_wo_age)) + geom_boxplot()
+ggplot(myData.qc[which(myData.qa$assessment==1),], aes(CVD.HiLo , frs_simp_total_wo_age)) + geom_boxplot()
+
+
+table(!is.na(myData$frs_simp_total_wo_age), myData$assessment)
+sapply((myData.cross %>% select(frs_simp_total_wo_age)), mean, na.rm=TRUE)
+sapply((myData.cross %>% select(frs_simp_total_wo_age)), sd, na.rm=TRUE)
+
+
+sapply((myData.qa %>%   select(frs_simp_total_wo_age) %>% filter(myData.qa$AD.HiLo=='HI' & myData.qa$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qa %>% select(frs_simp_total_wo_age) %>% filter(myData.qa$AD.HiLo=='HI' & myData.qa$assessment==1)), sd,
+       na.rm=TRUE)
+sapply((myData.qa %>%   select(frs_simp_total_wo_age) %>% filter(myData.qa$AD.HiLo=='LO' & myData.qa$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qa %>% select(frs_simp_total_wo_age) %>% filter(myData.qa$AD.HiLo=='LO' & myData.qa$assessment==1)), sd,
+       na.rm=TRUE)
+table(myData.qa$AD.HiLo[which(myData.qa$assessment==1 & !is.na(myData.qa$frs_simp_total_wo_age))])
+
+
+sapply((myData.qi %>%   select(frs_simp_total_wo_age) %>% filter(myData.qi$Infl.HiLo=='HI' & myData.qi$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qi %>% select(frs_simp_total_wo_age) %>% filter(myData.qi$Infl.HiLo=='HI' & myData.qi$assessment==1)), sd,
+       na.rm=TRUE)
+sapply((myData.qi %>%   select(frs_simp_total_wo_age) %>% filter(myData.qi$Infl.HiLo=='LO' & myData.qi$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qi %>% select(frs_simp_total_wo_age) %>% filter(myData.qi$Infl.HiLo=='LO' & myData.qi$assessment==1)), sd,
+       na.rm=TRUE)
+table(myData.qi$Infl.HiLo[which(myData.qi$assessment==1 & !is.na(myData.qi$frs_simp_total_wo_age))])
+
+sapply((myData.qc %>%   select(frs_simp_total_wo_age) %>% filter(myData.qc$CVD.HiLo=='HI' & myData.qc$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qc %>% select(frs_simp_total_wo_age) %>% filter(myData.qc$CVD.HiLo=='HI' & myData.qc$assessment==1)), sd,
+       na.rm=TRUE)
+sapply((myData.qc %>%   select(frs_simp_total_wo_age) %>% filter(myData.qc$CVD.HiLo=='LO' & myData.qc$assessment==1)), mean,
+       na.rm=TRUE)
+sapply((myData.qc %>% select(frs_simp_total_wo_age) %>% filter(myData.qc$CVD.HiLo=='LO' & myData.qc$assessment==1)), sd,
+       na.rm=TRUE)
+table(myData.qc$CVD.HiLo[which(myData.qc$assessment==1 & !is.na(myData.qc$frs_simp_total_wo_age))])
+
+
+leveneTest(myData.qa[which(myData.qa$assessment==1),]$frs_simp_total_wo_age ~ myData.qa[which(myData.qa$assessment==1),]$AD.HiLo)
+leveneTest(myData.qi[which(myData.qi$assessment==1),]$frs_simp_total_wo_age ~ myData.qi[which(myData.qi$assessment==1),]$Infl.HiLo)
+leveneTest(myData.qc[which(myData.qc$assessment==1),]$frs_simp_total_wo_age ~ myData.qc[which(myData.qc$assessment==1),]$CVD.HiLo)
+
+t.test(myData.qa[which(myData.qa$assessment==1),]$frs_simp_total_wo_age[myData.qa$AD.HiLo=='HI'],
+       myData.qa[which(myData.qa$assessment==1),]$frs_simp_total_wo_age[myData.qa$AD.HiLo=='LO'])
+
+t.test(myData.qi[which(myData.qi$assessment==1),]$frs_simp_total_wo_age[myData.qi$Infl.HiLo=='HI'],
+       myData.qi[which(myData.qi$assessment==1),]$frs_simp_total_wo_age[myData.qi$Infl.HiLo=='LO'])
+
+t.test(myData.qc[which(myData.qc$assessment==1),]$frs_simp_total_wo_age[myData.qc$CVD.HiLo=='HI'],
+       myData.qc[which(myData.qc$assessment==1),]$frs_simp_total_wo_age[myData.qc$CVD.HiLo=='LO'])
+```
+
+
+
+```{r, attr.source='.numberLines'}
+
+### ESR - median/IQL, non-parametric test
+
+ggplot(myData.qa[which(myData.qa$assessment==1),], aes(AD.HiLo , bl_sr)) + geom_boxplot()
+ggplot(myData.qi[which(myData.qi$assessment==1),], aes(Infl.HiLo , bl_sr)) + geom_boxplot()
+ggplot(myData.qc[which(myData.qc$assessment==1),], aes(CVD.HiLo , bl_sr)) + geom_boxplot()
+
+table(!is.na(myData$bl_sr), myData$assessment)
+sapply((myData.cross %>% select(bl_sr)), median, na.rm=TRUE)
+q <- sapply((myData.cross %>% select(bl_sr)), quantile, na.rm=TRUE)
+iqr <- q[4]-q[2]
+iqr
+
+
+sapply((myData.qa %>%   select(bl_sr) %>% filter(myData.qa$AD.HiLo=='HI' & myData.qa$assessment==1)), median,
+       na.rm=TRUE)
+q <- sapply((myData.qa %>% select(bl_sr) %>% filter(myData.qa$AD.HiLo=='HI' & myData.qa$assessment==1)), quantile,
+       na.rm=TRUE)
+iqr <- q[4]-q[2]
+iqr
+
+sapply((myData.qa %>%   select(bl_sr) %>% filter(myData.qa$AD.HiLo=='LO' & myData.qa$assessment==1)), median,
+       na.rm=TRUE)
+q <- sapply((myData.qa %>% select(bl_sr) %>% filter(myData.qa$AD.HiLo=='LO' & myData.qa$assessment==1)), quantile,
+       na.rm=TRUE)
+iqr <- q[4]-q[2]
+iqr
+table(myData.qa$AD.HiLo[which(myData.qa$assessment==1 & !is.na(myData.qa$bl_sr))])
+
+
+sapply((myData.qi %>%   select(bl_sr) %>% filter(myData.qi$Infl.HiLo=='HI' & myData.qi$assessment==1)), median,
+       na.rm=TRUE)
+q <- sapply((myData.qi %>% select(bl_sr) %>% filter(myData.qi$Infl.HiLo=='HI' & myData.qi$assessment==1)), quantile,
+       na.rm=TRUE)
+iqr <- q[4]-q[2]
+iqr
+
+sapply((myData.qi %>%   select(bl_sr) %>% filter(myData.qi$Infl.HiLo=='LO' & myData.qi$assessment==1)), median,
+       na.rm=TRUE)
+q <- sapply((myData.qi %>% select(bl_sr) %>% filter(myData.qi$Infl.HiLo=='LO' & myData.qi$assessment==1)), quantile,
+       na.rm=TRUE)
+iqr <- q[4]-q[2]
+iqr
+table(myData.qi$Infl.HiLo[which(myData.qi$assessment==1 & !is.na(myData.qi$bl_sr))])
+
+sapply((myData.qc %>%   select(bl_sr) %>% filter(myData.qc$CVD.HiLo=='HI' & myData.qc$assessment==1)), median,
+       na.rm=TRUE)
+q <- sapply((myData.qc %>% select(bl_sr) %>% filter(myData.qc$CVD.HiLo=='HI' & myData.qc$assessment==1)), quantile,
+       na.rm=TRUE)
+iqr <- q[4]-q[2]
+iqr
+sapply((myData.qc %>%   select(bl_sr) %>% filter(myData.qc$CVD.HiLo=='LO' & myData.qc$assessment==1)), median,
+       na.rm=TRUE)
+q <- sapply((myData.qc %>% select(bl_sr) %>% filter(myData.qc$CVD.HiLo=='LO' & myData.qc$assessment==1)), quantile,
+       na.rm=TRUE)
+iqr <- q[4]-q[2]
+iqr
+table(myData.qc$CVD.HiLo[which(myData.qc$assessment==1 & !is.na(myData.qc$bl_sr))])
+
+
+wilcox.test(myData.qa[which(myData.qa$assessment==1),]$bl_sr[myData.qa$AD.HiLo=='HI'],
+       myData.qa[which(myData.qa$assessment==1),]$bl_sr[myData.qa$AD.HiLo=='LO'])
+
+wilcox.test(myData.qi[which(myData.qi$assessment==1),]$bl_sr[myData.qi$Infl.HiLo=='HI'],
+       myData.qi[which(myData.qi$assessment==1),]$bl_sr[myData.qi$Infl.HiLo=='LO'])
+
+wilcox.test(myData.qc[which(myData.qc$assessment==1),]$bl_sr[myData.qc$CVD.HiLo=='HI'],
+       myData.qc[which(myData.qc$assessment==1),]$bl_sr[myData.qc$CVD.HiLo=='LO'])
+```
+
+
+
+
+```{r, attr.source='.numberLines'}
+#Number of participants with MRI data with age < 54
+table((myData$age < 54 & !is.na(myData$MTC.AD_no_stag)), myData$assessment)
+       
+table(myData.qa$AD.HiLo[which(myData.qa$age < 54 & !is.na(myData.qa$MTC.AD_no_stag))])
+
+table(myData.qa$AD.HiLo[which(myData.qa$age < 54 & !is.na(myData.qa$MTC.AD_no_stag) & myData.qa$assessment==1)])
+
+table(myData.qa$AD.HiLo[which(myData.qa$age < 54 & !is.na(myData.qa$MTC.AD_no_stag) & myData.qa$assessment==2)])
+
+table(myData.qa$AD.HiLo[which(myData.qa$age < 54 & !is.na(myData.qa$MTC.AD_no_stag) & myData.qa$assessment==3)])
+
+table(myData.qi$Infl.HiLo[which(myData.qi$age < 54 & !is.na(myData.qi$MTC.Infl_no_stag) & myData.qi$assessment==1)])
+
+
+table(myData.qi$Infl.HiLo[which(myData.qi$age < 54 & !is.na(myData.qi$MTC.Infl_no_stag) & myData.qi$assessment==2)])
+
+table(myData.qi$Infl.HiLo[which(myData.qi$age < 54 & !is.na(myData.qi$MTC.Infl_no_stag) & myData.qi$assessment==3)])
+
+table(myData.qc$CVD.HiLo[which(myData.qc$age < 54 & !is.na(myData.qc$MTC.CVD_no_stag) & myData.qc$assessment==1)])
+
+
+table(myData.qc$CVD.HiLo[which(myData.qc$age < 54 & !is.na(myData.qc$MTC.CVD_no_stag) & myData.qc$assessment==2)])
+
+table(myData.qc$CVD.HiLo[which(myData.qc$age < 54 & !is.na(myData.qc$MTC.CVD_no_stag) & myData.qc$assessment==3)])
+
+
+```
+
+```{r, attr.source='.numberLines', eval=FALSE}
+
+
+```
